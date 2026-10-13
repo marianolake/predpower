@@ -1,0 +1,6 @@
+^\.Rproj\.user$
+^.*\.Rproj$
+^README\.Rmd$
+^\.github$
+^vignettes/\.Rhistory$
+^\.DS_Store$

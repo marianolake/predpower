@@ -1,0 +1,297 @@
+---
+title: "Planning a prediction study before you collect data"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Planning a prediction study before you collect data}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>", fig.width = 7,
+                      fig.height = 3.6, dpi = 120)
+f3 <- function(x) formatC(x, format = "f", digits = 3)
+```
+
+This package helps analysts understand how well their data can support a
+predictive model, with a specific focus on the out-of-sample $R^2$ and the
+out-of-sample correlation $r$ that can be expected. The calculations require
+no outcome data.
+
+```{r setup}
+library(predpower)
+```
+
+## What the design tells you without an outcome
+
+Four design parameters determine expected out-of-sample accuracy: the sample
+size `n`, the number of predictors `p`, the in-sample signal `rho2_in`, and a
+design efficiency factor. Only the third involves an outcome, and at the
+planning stage it is assumed rather than measured — exactly as an effect size
+is in a power analysis.
+
+The design efficiency factor `Dstar` ($D^*$) summarizes how leverage is
+spread across the rows of the predictor matrix $X$. It is the ratio of the
+prediction penalty an evenly balanced design would incur to the penalty this
+design actually incurs: 1 when leverage is spread evenly across observations,
+falling toward 0 as it concentrates on a few.
+
+```{r}
+set.seed(1)
+X <- matrix(rlnorm(200 * 5), 200, 5)   # five skewed covariates
+de <- design_efficiency(X)
+de
+```
+
+In this example, five highly skewed covariates reduce the design's predictive
+efficiency to `r round(100 * de$Dstar)`% of what an evenly balanced design of
+the same size would deliver — a loss of about
+`r round(100 * (1 - de$Dstar))`%.
+
+Least squares and ridge regression have different efficiency factors. Ridge
+leverage, at the penalty $\kappa^*$ the design implies, is flatter than
+least-squares leverage, so the ridge factor $D^*(\kappa^*)$ is typically
+higher than $D^*$. With a covariate matrix in hand, the package computes both.
+Without one, you must state both; using $D^*$ for both is conservative for
+ridge.
+
+## A worked example
+
+The `phonestudy` data are design summaries from a published study that
+predicted personality from passively logged smartphone behavior
+(Stachl et al. 2020), following the analysis of Pargent et al. (2023): 620
+participants, 1,821 behavioral features aggregated over several weeks
+(missing values replaced by each feature's median), and the sociability facet
+of Extraversion as the outcome. Here we focus on nested predictor sets of the
+first $p$ = 25, 100 and 600 features of one random ordering, and on the full
+set of 1,821.
+
+```{r}
+ds <- phonestudy$designs
+raw <- ds[ds$scale == "raw", ]
+raw[, c("p", "n", "Dstar", "max_leverage", "Dstar_ridge", "p_eff")]
+```
+
+For the three designs that least squares can fit, `Dstar` runs from
+`r f3(min(raw$Dstar, na.rm = TRUE))` to `r f3(max(raw$Dstar, na.rm = TRUE))`:
+these designs deliver between about a sixth and seven-tenths of what an
+evenly balanced design of the same size would. With all 1,821 features,
+$p + 1 > n$ and least squares is undefined, so `Dstar` is `NA`. The ridge
+factor `Dstar_ridge` is close to 1 throughout. (`Dstar_ridge` and `p_eff`
+depend on `rho2_in` through $\kappa^*$; the data report them at each design's
+ridge break-even, defined below.)
+
+The reason for the low least-squares efficiencies is high leverage.
+
+```{r, fig.height = 3.4}
+h <- phonestudy$leverage[, "p100"]
+plot(sort(h), type = "l", lwd = 2, las = 1,
+     xlab = "participants, ordered by leverage", ylab = "leverage")
+abline(h = 101 / 620, lty = 3)          # what even leverage would give
+text(1, 101 / 620, "even leverage", adj = c(0, -0.5), cex = 0.8)
+c(max_leverage = max(h), even = 101 / 620)
+```
+
+In the $p = 100$ design one participant has leverage
+`r f3(max(h))` and so very nearly determines their own fitted value, and a
+handful of rows dominate the least-squares fit. Many of these features are
+mostly missing, and median imputation turns such a feature into a block of
+identical values with a few observed values far from it, which is exactly the
+pattern that concentrates leverage. Computing $D^*$ before fitting is how to
+see this coming.
+
+## The in-sample signal
+
+The design formulas require a value of `rho2_in`, the population version of
+the $R^2$ reported in most regression analyses.
+
+There are two approaches. One is to assume a value, or a series of values, and
+examine how the results depend on it. The other is to estimate it. If you
+estimate `rho2_in`, use the **adjusted** in-sample $R^2$: the raw statistic is
+badly upward-biased, especially when $p$ is large relative to $n$. It is also
+wise to examine the values in its **confidence interval**, which inverting the
+noncentral $F$ supplies from `n`, `p` and the raw $R^2$ alone.
+
+```{r}
+d <- ds[ds$p == 100 & ds$scale == "raw", ]
+s <- rho2_from_R2(R2 = d$R2_in, n = d$n, p = d$p)
+s
+```
+
+Here a raw in-sample $R^2$ of `r f3(s$raw)` becomes an adjusted $R^2$ of
+`r f3(s$estimate)`, with 95% interval [`r f3(s$lower)`, `r f3(s$upper)`].
+
+### When there are more predictors than observations
+
+With all 1,821 features, $p + 1 > n$: the least-squares fit is exact and the
+adjusted $R^2$ is undefined. `rho2_reml()` estimates `rho2_in` instead, by
+restricted maximum likelihood (Patterson and Thompson 1971) under the same
+assumption on the coefficients from which the ridge penalty is derived: they
+are treated as draws with a common variance, so the outcome's variance has a
+signal part proportional to $ZZ'$ and a noise part. It is the estimator used
+for the share of trait variance explained by genome-wide markers (Yang et al.
+2010), where $p$ also far exceeds $n$. `rho2_from_data()` and
+`pred_power(X = , y = )` switch to it automatically when $p + 1 \ge n$.
+
+```{r}
+full <- ds[ds$p == 1821 & ds$scale == "raw", ]
+full[, c("rho2_in", "rho2_lower", "rho2_upper", "rho2_method", "requires_ridge")]
+```
+
+For the full PhoneStudy feature set, the REML estimate is `r f3(full$rho2_in)`
+with 95% profile-likelihood interval [`r f3(full$rho2_lower)`,
+`r f3(full$rho2_upper)`], well above the `r f3(full$requires_ridge)` that ridge
+needs. The estimate is only as good as that assumption: it is close to unbiased
+when the signal is spread over many directions or concentrated in the largest
+ones, and it fails when the signal sits in the directions of smallest
+variance. When $p + 1 < n$ the adjusted $R^2$ makes no such assumption and is
+preferable.
+
+## Expected accuracy: `pred_power()`
+
+`pred_power()` puts the pieces together. It reports the expected
+out-of-sample statistics, the break-even signal the design requires, and,
+when an interval for `rho2_in` is available, the expected out-of-sample $R^2$
+at both ends of it. The break-even value (`requires`) is the in-sample signal
+at which the expected out-of-sample $R^2$ reaches 0. Put another way, it is
+how much of the outcome the covariates need to explain in-sample for the
+model to predict new observations better, in expectation, than simply
+predicting every unit's outcome with the sample mean.
+
+```{r}
+a <- pred_power(n = d$n, p = d$p, R2_in = d$R2_in,
+                  Dstar = d$Dstar, Dstar_ridge = d$Dstar_ridge)
+summary(a)
+```
+
+```{r, include = FALSE}
+tb <- a$table
+ols <- tb[tb$estimator == "ols", ]; rdg <- tb[tb$estimator == "ridge", ]
+```
+
+Ordinary least squares (OLS) would need `rho2_in` of at least
+`r f3(ols$requires)`, above the upper end of the interval for `rho2_in`
+(`r f3(s$upper)`). Its expected out-of-sample $R^2$ is negative everywhere in
+that interval, from `r f3(ols$R2oos_lower)` to `r f3(ols$R2oos_upper)`.
+
+Ridge regression trades a little bias for a large reduction in variance, and
+needs far less signal: `r f3(rdg$requires)`, below the lower end of the
+interval (`r f3(s$lower)`). Its expected out-of-sample $R^2$ runs from
+`r f3(rdg$R2oos_lower)` to `r f3(rdg$R2oos_upper)` across the interval, so
+ridge is expected to beat the sample mean. The break-even concerns the
+expected value: a design that only just meets it beats the sample mean in
+roughly half of samples.
+
+Without the covariate matrix, the ridge break-even above uses a planning
+approximation to the effective number of parameters, $p_{eff}$, which treats
+the covariates as uncorrelated. Computed from the design's own eigenvalues and
+ridge leverage, as `pred_power(X = ...)` does when given the features, the
+ridge break-even is `r f3(d$requires_ridge)` (the `requires_ridge` column);
+`breakeven_rho2(X = X, estimator = "ridge")` gives the same value directly.
+Correlated and skewed covariates lower $p_{eff}$, so the planning value is
+the more conservative of the two.
+
+Note also that `roos`, the expected correlation, is positive for least
+squares even though its expected `R2oos` is negative. A correlation is
+unchanged if every prediction is stretched away from or shrunk toward the
+mean, so $r^2_{oos}$ is roughly the $R^2_{oos}$ the same predictions could
+reach if they were rescaled by the right amount. Least-squares predictions on
+this design order participants sensibly but spread them far too widely; ridge's
+shrinkage largely corrects that. Reporting both statistics shows whether a
+disappointing $R^2_{oos}$ reflects predictions that carry no information or
+predictions that carry information on the wrong scale.
+
+```{r, fig.height = 3.6}
+plot(a)
+```
+
+## Transforming the covariates
+
+$D^*$ is sensitive to skewness, which is a property of the measurement scale,
+not of the participants. The design efficiency can therefore often be raised
+by transforming the covariates:
+
+```{r}
+sc <- phonestudy$scalings
+sc
+```
+
+For the $p = 100$ design, `Dstar` rises from `r f3(sc$Dstar[1])` on the raw
+scale to `r f3(sc$Dstar[2])` under a log transform and `r f3(sc$Dstar[3])`
+under a rank-normal transform, and the largest leverage falls from
+`r f3(sc$max_leverage[1])` to `r f3(sc$max_leverage[3])`. Because this
+example also has outcome data, we can see that the realized least-squares
+leave-one-out $R^2$ (`R2oos_act`) improves too, from `r f3(sc$R2oos_act[1])`
+to `r f3(sc$R2oos_act[3])`. `compare_scalings()` runs the same comparison on
+your own covariates.
+
+## Using this for planning
+
+Before collecting data you might ask: what in-sample $R^2$ would this design
+need in order to predict new observations better than the sample mean? For
+ridge, the `Dstar` argument is $D^*(\kappa^*)$.
+
+```{r}
+breakeven_rho2(n = 620, p = 100, Dstar = 0.346)                     # least squares
+breakeven_rho2(n = 620, p = 100, Dstar = 0.970, estimator = "ridge") # ridge
+```
+
+Alternatively, you can solve for $n$, $p$ or the efficiency factor:
+
+```{r}
+solve_n(p = 100, rho2_in = 0.134, Dstar = 0.346)                     # n needed
+solve_n(p = 100, rho2_in = 0.134, Dstar = 0.970, estimator = "ridge")
+solve_p(n = 620, rho2_in = 0.134, Dstar = 0.346)                     # p affordable
+solve_dstar(n = 620, p = 100, rho2_in = 0.134)                       # D* required
+```
+
+The last answer is `NA`. Given the other three inputs, even a perfectly even
+design would not let least squares beat the sample mean: there is too little
+in-sample signal for this number of predictors and this sample size.
+
+```{r, fig.height = 3.8}
+plot_breakeven(p = c(25, 100, 200), Dstar = 0.346,
+               rho2_in = 0.134, mark_n = 620)
+```
+
+Read across at an assumed in-sample $R^2$ to get the sample size $n$ required;
+read up at a planned sample size $n$ to get the in-sample $R^2$ required.
+
+Because `rho2_in` is assumed, report a range of values:
+
+```{r}
+sensitivity(n = c(300, 620, 1200), p = 100,
+            rho2_in = c(0.07, 0.13, 0.20),
+            Dstar = 0.346, Dstar_ridge = 0.970)
+```
+
+## Caveats
+
+- With $p + 1 \ge n$, `rho2_in` can only be estimated under the ridge prior
+  (`rho2_reml()`); treat that estimate with the caution described above.
+- Without `X`, ridge approximates `p_eff` by its value for uncorrelated
+  covariates (the Marchenko-Pastur form). That is exact for uncorrelated
+  covariates at any p/n; correlated or heavy-tailed covariates lower `p_eff`,
+  so for them the ridge results are conservative. Supply `X` when you have it.
+- Ridge results assume an isotropic prior on the coefficients. In simulation,
+  a sparse coefficient vector costs the ridge formulas nothing measurable, but
+  collinear covariates make them optimistic.
+- The target is leave-one-out cross-validation, and covariates are assumed to
+  be measured without error.
+
+## References
+
+Patterson, H. D., and Thompson, R. (1971). Recovery of inter-block information
+when block sizes are unequal. *Biometrika*, 58(3), 545–554.
+
+Pargent, F., Schoedel, R., and Stachl, C. (2023). Best practices in supervised
+machine learning: A tutorial for psychologists. *Advances in Methods and
+Practices in Psychological Science*, 6(3).
+
+Stachl, C., Au, Q., Schoedel, R., Bühner, M., et al. (2020). Predicting
+personality from patterns of behavior collected with smartphones.
+*Proceedings of the National Academy of Sciences*, 117(30), 17680–17687.
+
+Yang, J., Benyamin, B., McEvoy, B. P., et al. (2010). Common SNPs explain a
+large proportion of the heritability for human height. *Nature Genetics*,
+42(7), 565–569.

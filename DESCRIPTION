@@ -1,0 +1,28 @@
+Package: predpower
+Title: Design-Stage Assessment of Out-of-Sample Prediction Accuracy
+Version: 0.2.0
+Authors@R: c(
+    person("Elizabeth", "Tipton", email = "tipton@northwestern.edu",
+           role = c("aut", "cre")))
+Description: Power-analysis-style calculations for prediction studies. Given a
+    sample size, a number of predictors, an assumed in-sample signal and a
+    design efficiency factor, returns the expected out-of-sample R-squared and
+    the expected correlation between observed and predicted outcomes, under
+    ordinary least squares and under ridge regression at the design-implied
+    penalty. Computes the design efficiency factor from a covariate matrix,
+    supplies confidence intervals for the assumed signal by inverting the
+    noncentral F or, when there are more predictors than observations, by
+    restricted maximum likelihood under the ridge prior, and solves for the sample size, signal, number of predictors
+    or design efficiency a study would need to beat the sample mean. All
+    quantities are computable before any outcome is observed.
+License: MIT + file LICENSE
+Encoding: UTF-8
+LazyData: true
+Depends: R (>= 4.0)
+Imports: stats, graphics, grDevices
+Suggests: testthat (>= 3.0.0), knitr, rmarkdown
+VignetteBuilder: knitr
+Config/testthat/edition: 3
+URL: https://github.com/marianolake/predpower
+BugReports: https://github.com/marianolake/predpower/issues
+Config/roxygen2/version: 8.0.0
