@@ -228,5 +228,5 @@ printout.
 
 ## Reference
 
-Tipton, E. Designing for Prediction: Design Formulas for
+Tipton, E. Designing for Prediction: Planning Formulas for
 Expected Out-of-Sample R^2 and r.
